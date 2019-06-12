@@ -1,12 +1,10 @@
-# encoding: utf-8
-from __future__ import unicode_literals
-
 import datetime
 import json
 import mimetypes
 import posixpath
 from logging import getLogger
 from time import mktime
+from urllib.parse import urlparse
 
 import minio
 import minio.error as merr
@@ -19,11 +17,6 @@ from minio.helpers import get_target_url
 
 from .errors import minio_error
 from .files import ReadOnlySpooledTemporaryFile
-
-try:
-    from urllib.parse import urlparse
-except ImportError:  # Python 2.7 compatibility
-    from urlparse import urlparse
 
 logger = getLogger("minio_storage")
 
@@ -42,7 +35,7 @@ class MinioStorage(Storage):
                  base_url=None, file_class=None,
                  auto_create_bucket=False, presign_urls=False,
                  auto_create_policy=False, backup_format=None,
-                 backup_bucket=None,
+                 backup_bucket=None, auto_check_bucket=False,
                  *args, **kwargs):
         self.client = minio_client
         self.bucket_name = bucket_name
@@ -61,8 +54,7 @@ class MinioStorage(Storage):
 
         self.presign_urls = presign_urls
 
-        if auto_create_bucket and not self.client.bucket_exists(
-                self.bucket_name):
+        if auto_create_bucket and not self.client.bucket_exists(self.bucket_name):
 
             self.client.make_bucket(self.bucket_name)
 
@@ -72,7 +64,7 @@ class MinioStorage(Storage):
                     self._policy("READ_ONLY")
                 )
 
-        elif not self.client.bucket_exists(self.bucket_name):
+        elif auto_check_bucket and not self.client.bucket_exists(self.bucket_name):
             raise IOError("The bucket {} does not exist".format(bucket_name))
 
         super(MinioStorage, self).__init__()
@@ -327,6 +319,7 @@ class MinioStorage(Storage):
                     while path.endswith('/'):
                         path = path[:-1]
                     return path
+
                 url = "{}/{}".format(strip_end(self.base_url),
                                      strip_beg(name))
             else:
@@ -357,9 +350,7 @@ class MinioStorage(Storage):
             info = self.client.stat_object(self.bucket_name, name)
             return datetime.datetime.fromtimestamp(mktime(info.last_modified))
         except merr.ResponseError as error:
-            raise minio_error(
-                "Could not access modification time for file {}"
-                .format(name), error)
+            raise minio_error("Could not access modification time for file {}".format(name), error)
 
 
 _NoValue = object()
@@ -379,10 +370,12 @@ def create_minio_client_from_settings():
     access_key = get_setting("MINIO_STORAGE_ACCESS_KEY")
     secret_key = get_setting("MINIO_STORAGE_SECRET_KEY")
     secure = get_setting("MINIO_STORAGE_USE_HTTPS", True)
-    client = minio.Minio(endpoint,
-                         access_key=access_key,
-                         secret_key=secret_key,
-                         secure=secure)
+    client = minio.Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure
+    )
     return client
 
 
@@ -392,16 +385,12 @@ class MinioMediaStorage(MinioStorage):
         client = create_minio_client_from_settings()
         bucket_name = get_setting("MINIO_STORAGE_MEDIA_BUCKET_NAME")
         base_url = get_setting("MINIO_STORAGE_MEDIA_URL", None)
-        auto_create_bucket = get_setting(
-            "MINIO_STORAGE_AUTO_CREATE_MEDIA_BUCKET", False)
-        auto_create_policy = get_setting(
-            "MINIO_STORAGE_AUTO_CREATE_MEDIA_POLICY", False)
-        presign_urls = get_setting(
-            'MINIO_STORAGE_MEDIA_USE_PRESIGNED', False)
-        backup_format = get_setting(
-            "MINIO_STORAGE_MEDIA_BACKUP_FORMAT", False)
-        backup_bucket = get_setting(
-            "MINIO_STORAGE_MEDIA_BACKUP_BUCKET", False)
+        auto_create_bucket = get_setting("MINIO_STORAGE_AUTO_CREATE_MEDIA_BUCKET", False)
+        auto_create_policy = get_setting("MINIO_STORAGE_AUTO_CREATE_MEDIA_POLICY", False)
+        presign_urls = get_setting('MINIO_STORAGE_MEDIA_USE_PRESIGNED', False)
+        backup_format = get_setting("MINIO_STORAGE_MEDIA_BACKUP_FORMAT", False)
+        backup_bucket = get_setting("MINIO_STORAGE_MEDIA_BACKUP_BUCKET", False)
+        auto_check_bucket = get_setting("MINIO_STORAGE_AUTO_CHECK_MEDIA_BUCKET", False)
 
         super(MinioMediaStorage, self).__init__(
             client, bucket_name,
@@ -410,7 +399,9 @@ class MinioMediaStorage(MinioStorage):
             base_url=base_url,
             presign_urls=presign_urls,
             backup_format=backup_format,
-            backup_bucket=backup_bucket)
+            backup_bucket=backup_bucket,
+            auto_check_bucket=auto_check_bucket
+        )
 
 
 @deconstructible
@@ -419,11 +410,8 @@ class MinioStaticStorage(MinioStorage):
         client = create_minio_client_from_settings()
         base_url = get_setting("MINIO_STORAGE_STATIC_URL", None)
         bucket_name = get_setting("MINIO_STORAGE_STATIC_BUCKET_NAME")
-        auto_create_bucket = get_setting(
-            "MINIO_STORAGE_AUTO_CREATE_STATIC_BUCKET", False)
-        auto_create_policy = get_setting(
-            "MINIO_STORAGE_AUTO_CREATE_STATIC_POLICY", False)
-
+        auto_create_bucket = get_setting("MINIO_STORAGE_AUTO_CREATE_STATIC_BUCKET", False)
+        auto_create_policy = get_setting("MINIO_STORAGE_AUTO_CREATE_STATIC_POLICY", False)
         presign_urls = get_setting('MINIO_STORAGE_STATIC_USE_PRESIGNED', False)
 
         super(MinioStaticStorage, self).__init__(
@@ -431,4 +419,5 @@ class MinioStaticStorage(MinioStorage):
             auto_create_bucket=auto_create_bucket,
             auto_create_policy=auto_create_policy,
             base_url=base_url,
-            presign_urls=presign_urls)
+            presign_urls=presign_urls
+        )
